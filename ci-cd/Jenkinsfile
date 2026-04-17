@@ -91,6 +91,7 @@ pipeline {
           sh '''
             mvn org.owasp:dependency-check-maven:check \
               -DfailBuildOnCVSS=7 \
+              -DnvdApiKey=14EB33B7-AB3A-F111-836A-129478FCB64D \
               -Dformats=HTML,JSON \
               || true
           '''
