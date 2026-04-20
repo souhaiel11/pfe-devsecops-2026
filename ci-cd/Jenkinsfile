@@ -112,7 +112,7 @@ pipeline {
     stage('📤 Deploy Nexus') {
       steps {
         dir('app') {
-          sh 'mvn deploy -DskipTests --settings /var/jenkins_home/.m2/settings.xml'
+          sh 'mvn deploy -DskipTests -Ddependency-check.skip=true --settings /var/jenkins_home/.m2/settings.xml'
         }
       }
     }
