@@ -91,7 +91,6 @@ pipeline {
           sh '''
             mvn org.owasp:dependency-check-maven:check \
               -DfailBuildOnCVSS=7 \
-              -DnvdApiKey=14EB33B7-AB3A-F111-836A-129478FCB64D \
               -Dformats=HTML,JSON \
               || true
           '''
@@ -112,7 +111,7 @@ pipeline {
     stage('📤 Deploy Nexus') {
       steps {
         dir('app') {
-          sh 'mvn deploy -DskipTests -Ddependency-check.skip=true --settings /var/jenkins_home/.m2/settings.xml'
+          sh 'mvn deploy -DskipTests --settings /var/jenkins_home/.m2/settings.xml'
         }
       }
     }
@@ -307,22 +306,6 @@ pipeline {
           echo "✅ n8n notifié — event: ${event}"
         } catch (Exception e) {
           echo "⚠️ n8n notification failed: ${e.message}"
-        }
-
-        // ── Backend Dashboard ─────────────────────────────
-        try {
-          def bp = """{"name": "${env.JOB_NAME}", "build": {"phase": "FINALIZED", "status": "${buildStatus == 'SUCCESS' ? 'SUCCESS' : 'FAILURE'}", "number": "${env.BUILD_NUMBER}", "url": "${env.BUILD_URL}"}}"""
-          httpRequest(
-            url                : 'http://172.31.172.61:3001/api/webhooks/jenkins/54192eca-43da-4d8f-9b49-30c143983fdd',
-            httpMode           : 'POST',
-            contentType        : 'APPLICATION_JSON',
-            requestBody        : bp,
-            ignoreSslErrors    : true,
-            validResponseCodes : '100:599'
-          )
-          echo "✅ Backend notifié"
-        } catch (Exception e) {
-          echo "⚠️ Backend failed: ${e.message}"
         }
       }
     }
