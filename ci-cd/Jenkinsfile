@@ -88,13 +88,15 @@ pipeline {
     stage('🛡️ SCA - OWASP Dependency Check') {
       steps {
         dir('app') {
-          sh '''
-            mvn org.owasp:dependency-check-maven:check \
-              -DfailBuildOnCVSS=7 \
-              -DnvdApiKey=14EB33B7-AB3A-F111-836A-129478FCB64D \
-              -Dformats=HTML,JSON \
-              || true
-          '''
+          withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+            sh '''
+              mvn org.owasp:dependency-check-maven:check \
+                -DfailBuildOnCVSS=7 \
+                -DnvdApiKey=${NVD_API_KEY} \
+                -Dformats=HTML,JSON \
+                || true
+            '''
+          }
         }
       }
       post {
@@ -189,20 +191,28 @@ pipeline {
     // ── 11. Deploy App ───────────────────────────────────────
     stage('🚀 Deploy App') {
       steps {
-        sh """
-          docker stop ${APP_NAME} 2>/dev/null || true
-          docker rm   ${APP_NAME} 2>/dev/null || true
-          docker run -d \
-            --name ${APP_NAME} \
-            --network pfe-network \
-            -p 8080:8080 \
-            -e DB_HOST=pfe-postgres \
-            -e DB_PORT=5432 \
-            -e DB_NAME=devsecops \
-            -e DB_USER=devsecops \
-            -e DB_PASSWORD=devsecops123 \
-            ${DOCKER_IMAGE}:latest
-        """
+        withCredentials([
+          string(credentialsId: 'db-host', variable: 'DB_HOST'),
+          string(credentialsId: 'db-port', variable: 'DB_PORT'),
+          string(credentialsId: 'db-name', variable: 'DB_NAME'),
+          string(credentialsId: 'db-user', variable: 'DB_USER'),
+          string(credentialsId: 'db-password', variable: 'DB_PASSWORD')
+        ]) {
+          sh """
+            docker stop ${APP_NAME} 2>/dev/null || true
+            docker rm   ${APP_NAME} 2>/dev/null || true
+            docker run -d \
+              --name ${APP_NAME} \
+              --network pfe-network \
+              -p 8080:8080 \
+              -e DB_HOST=${DB_HOST} \
+              -e DB_PORT=${DB_PORT} \
+              -e DB_NAME=${DB_NAME} \
+              -e DB_USER=${DB_USER} \
+              -e DB_PASSWORD=${DB_PASSWORD} \
+              ${DOCKER_IMAGE}:latest
+          """
+        }
       }
     }
 
@@ -311,7 +321,7 @@ pipeline {
 
         // ── Backend Dashboard ─────────────────────────────
         try {
-          def bp = """{"name": "${env.JOB_NAME}", "build": {"phase": "FINALIZED", "status": "${buildStatus == 'SUCCESS' ? 'SUCCESS' : 'FAILURE'}", "number": "${env.BUILD_NUMBER}", "url": "${env.BUILD_URL}"}}"""
+          def bp = """\"name\": \"${env.JOB_NAME}\", \"build\": {\"phase\": \"FINALIZED\", \"status\": \"${buildStatus == 'SUCCESS' ? 'SUCCESS' : 'FAILURE'}\", \"number\": \"${env.BUILD_NUMBER}\", \"url\": \"${env.BUILD_URL}\"}}"
           httpRequest(
             url                : 'http://172.31.172.61:3001/api/webhooks/jenkins/54192eca-43da-4d8f-9b49-30c143983fdd',
             httpMode           : 'POST',
