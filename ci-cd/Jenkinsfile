@@ -7,71 +7,57 @@ def COLOR_MAP = [
 pipeline {
   agent any
 
-  tools {
-    maven 'M3'
-  }
+  tools { maven 'M3' }
 
   environment {
     SONAR_PROJECT_KEY = 'pfe-devsecops-2026'
     DOCKER_IMAGE      = 'pfe-devsecops-2026'
     APP_NAME          = 'devsecops-app'
+    N8N_WEBHOOK       = 'http://n8n:5678/webhook/jenkins-event'
+    N8N_API_KEY       = 'devsecops-secret-2024'
+    PROJECT_ID        = '54192eca-43da-4d8f-9b49-30c143983fdd'
+    BACKEND_URL       = 'http://172.31.172.61:3001'
   }
 
   stages {
 
-    // ── 1. Clean ─────────────────────────────────────────────
     stage('🧹 Clean') {
       steps {
         dir('app') { sh 'mvn clean' }
       }
     }
 
-    // ── 2. Compile ───────────────────────────────────────────
     stage('⚙️ Compile') {
       steps {
         dir('app') { sh 'mvn compile' }
       }
     }
 
-    // ── 3. Tests + Coverage JaCoCo ───────────────────────────
     stage('🧪 Tests + Coverage') {
       steps {
-        dir('app') {
-          sh 'mvn test jacoco:report'
-        }
+        dir('app') { sh 'mvn test jacoco:report' }
       }
       post {
         always {
-          script {
-            env.TEST_COUNT    = '9'
-            env.TEST_FAILURES = '0'
-            env.TEST_SUMMARY  = 'Tests executed successfully'
-          }
           junit allowEmptyResults: true,
                 testResults: 'app/target/surefire-reports/*.xml'
         }
       }
     }
 
-    // ── 4. Package ───────────────────────────────────────────
-    stage('📦 Package + Detect JAR') {
+    stage('📦 Package') {
       steps {
         dir('app') {
           sh 'mvn package -DskipTests'
           script {
-            def jar = sh(
-              script: "ls target/*.jar | grep -v 'original' | head -n 1",
-              returnStdout: true
-            ).trim()
-            env.JAR_NAME       = jar.replaceAll('target/', '')
-            env.PACKAGE_STATUS = 'SUCCESS'
-            echo "JAR détecté : ${env.JAR_NAME}"
+            def jar = sh(script: "ls target/*.jar | grep -v original | head -1", returnStdout: true).trim()
+            env.JAR_NAME = jar.replaceAll('target/', '')
+            echo "JAR: ${env.JAR_NAME}"
           }
         }
       }
     }
 
-    // ── 5. SAST — SonarQube ──────────────────────────────────
     stage('🔍 SAST - SonarQube') {
       steps {
         dir('app') {
@@ -82,132 +68,50 @@ pipeline {
               -Dsonar.projectKey=$SONAR_PROJECT_KEY
             '''
           }
-          script {
-            env.SONAR_STATUS = 'SUCCESS'
-            env.SONAR_URL    = "http://sonarqube:9000/dashboard?id=${env.SONAR_PROJECT_KEY}"
-          }
         }
       }
     }
 
-    // ── 6. SCA — OWASP Dependency Check ─────────────────────
-    stage('🛡️ SCA - OWASP Dependency Check') {
+    stage('🛡️ SCA - OWASP') {
       steps {
         dir('app') {
-          script {
-            def owaspResult = sh(
-              script: '''
-                mvn org.owasp:dependency-check-maven:check \
-                  -DfailBuildOnCVSS=7 \
-                  -DnvdApiKey=14EB33B7-AB3A-F111-836A-129478FCB64D \
-                  -Dformats=HTML,JSON 2>&1 || true
-              ''',
-              returnStdout: true
-            ).trim()
-
-            if (owaspResult.contains('NVD Returned Status Code: 403')) {
-              env.OWASP_STATUS = 'FAILED - NVD API key expired (403)'
-              env.OWASP_ERROR  = 'NVD API 403 Forbidden - API key invalid or expired'
-            } else if (owaspResult.contains('BUILD SUCCESS')) {
-              env.OWASP_STATUS = 'SUCCESS'
-              env.OWASP_ERROR  = ''
-            } else {
-              env.OWASP_STATUS = 'FAILED'
-              env.OWASP_ERROR  = 'Dependency check failed - unable to update NVD data'
-            }
-            echo "OWASP Status: ${env.OWASP_STATUS}"
-          }
+          sh '''
+            mvn org.owasp:dependency-check-maven:check \
+              -DfailBuildOnCVSS=7 \
+              -DnvdApiKey=14EB33B7-AB3A-F111-836A-129478FCB64D \
+              -Dformats=HTML,JSON || true
+          '''
         }
       }
       post {
         always {
           publishHTML(target: [
-            reportDir:   'app/target',
-            reportFiles: 'dependency-check-report.html',
-            reportName:  'OWASP Dependency Check'
+            reportDir: 'app/target', reportFiles: 'dependency-check-report.html',
+            reportName: 'OWASP Dependency Check'
           ])
         }
       }
     }
 
-    // ── 7. Deploy Nexus ──────────────────────────────────────
     stage('📤 Deploy Nexus') {
       steps {
         dir('app') {
-          script {
-            def nexusResult = sh(
-              script: 'mvn deploy -DskipTests -Ddependency-check.skip=true --settings /var/jenkins_home/.m2/settings.xml 2>&1',
-              returnStdout: true
-            ).trim()
-            env.NEXUS_STATUS = nexusResult.contains('BUILD SUCCESS') ? 'SUCCESS' : 'FAILED'
-            env.NEXUS_URL    = 'http://nexus:8081/repository/maven-releases/com/pfe/devsecops-pfe/'
-          }
+          sh 'mvn deploy -DskipTests -Ddependency-check.skip=true --settings /var/jenkins_home/.m2/settings.xml'
         }
       }
     }
 
-    // ── 8. Build Docker ──────────────────────────────────────
     stage('🐳 Build Docker') {
       steps {
         dir('app') {
-          script {
-            def dockerResult = sh(
-              script: "docker build --build-arg JAR_FILE=${env.JAR_NAME} -t ${DOCKER_IMAGE}:latest . 2>&1",
-              returnStdout: true
-            ).trim()
-            env.DOCKER_BUILD_STATUS = dockerResult.contains('naming to') ? 'SUCCESS' : 'FAILED'
-            env.DOCKER_IMAGE_TAG    = "${DOCKER_IMAGE}:latest"
-          }
+          sh "docker build --build-arg JAR_FILE=${env.JAR_NAME} -t ${DOCKER_IMAGE}:latest ."
         }
       }
     }
 
-    // ── 9. Container Scan — Trivy ────────────────────────────
     stage('🔒 Container Scan - Trivy') {
       steps {
-        script {
-          def trivyResult = sh(
-            script: """
-              trivy image \
-                --exit-code 1 \
-                --severity CRITICAL \
-                --format json \
-                --output trivy-report.json \
-                ${DOCKER_IMAGE}:latest 2>&1 || true
-            """,
-            returnStdout: true
-          ).trim()
-
-          if (trivyResult.contains('not found') || trivyResult.contains('command not found')) {
-            env.TRIVY_STATUS   = 'FAILED - trivy not installed'
-            env.TRIVY_ERROR    = 'trivy: command not found - Trivy is not installed on Jenkins agent'
-            env.TRIVY_CRITICAL = '0'
-            env.TRIVY_HIGH     = '0'
-          } else {
-            try {
-              def reportJson    = readFile('trivy-report.json')
-              def report        = new groovy.json.JsonSlurper().parseText(reportJson)
-              def criticalCount = 0
-              def highCount     = 0
-              report.Results?.each { result ->
-                result.Vulnerabilities?.each { vuln ->
-                  if (vuln.Severity == 'CRITICAL') criticalCount++
-                  if (vuln.Severity == 'HIGH')     highCount++
-                }
-              }
-              env.TRIVY_CRITICAL = "${criticalCount}"
-              env.TRIVY_HIGH     = "${highCount}"
-              env.TRIVY_STATUS   = criticalCount > 0 ? "FAILED - ${criticalCount} CRITICAL vulnerabilities" : 'SUCCESS'
-              env.TRIVY_ERROR    = criticalCount > 0 ? "${criticalCount} critical CVEs found in Docker image" : ''
-            } catch(e) {
-              env.TRIVY_STATUS   = 'FAILED - report parse error'
-              env.TRIVY_ERROR    = e.message
-              env.TRIVY_CRITICAL = '0'
-              env.TRIVY_HIGH     = '0'
-            }
-          }
-          echo "Trivy: ${env.TRIVY_STATUS}"
-        }
+        sh "trivy image --exit-code 1 --severity CRITICAL --format json --output trivy-report.json ${DOCKER_IMAGE}:latest || true"
       }
       post {
         always {
@@ -216,7 +120,6 @@ pipeline {
       }
     }
 
-    // ── 10. Push Docker Hub ──────────────────────────────────
     stage('📤 Push Docker Hub') {
       steps {
         withCredentials([usernamePassword(
@@ -233,7 +136,6 @@ pipeline {
       }
     }
 
-    // ── 11. Deploy App ───────────────────────────────────────
     stage('🚀 Deploy App') {
       steps {
         sh """
@@ -253,7 +155,6 @@ pipeline {
       }
     }
 
-    // ── 12. DAST — OWASP ZAP ────────────────────────────────
     stage('🌐 DAST - OWASP ZAP') {
       steps {
         sh """
@@ -261,193 +162,94 @@ pipeline {
             --network pfe-network \
             -v \$(pwd)/security/zap:/zap/wrk \
             ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py \
-            -t http://${APP_NAME}:8080 \
-            -r zap-report.html \
-            -I || true
+            zap-baseline.py -t http://${APP_NAME}:8080 -r zap-report.html -I || true
         """
       }
       post {
         always {
           publishHTML(target: [
-            reportDir:   'security/zap',
-            reportFiles: 'zap-report.html',
-            reportName:  'OWASP ZAP DAST'
+            reportDir: 'security/zap', reportFiles: 'zap-report.html',
+            reportName: 'OWASP ZAP DAST'
           ])
         }
       }
     }
   }
 
-  // ── Post — Notifications ──────────────────────────────────
+  // ── Post — Notification minimale vers n8n ─────────────────
+  // Toute l'intelligence est dans n8n :
+  // - Fetch du log complet via Jenkins API
+  // - Fetch des métriques SonarQube via API
+  // - Extraction automatique des erreurs
+  // - Analyse par agents IA
   post {
     always {
       script {
         def buildStatus = currentBuild.currentResult
+        def event       = buildStatus == 'SUCCESS' ? 'pipeline_success' : 'pipeline_failed'
+        def severity    = buildStatus == 'FAILURE'  ? 'HIGH'
+                        : buildStatus == 'UNSTABLE' ? 'MEDIUM' : 'LOW'
 
-        def failedStages  = []
-        def errorMessages = []
-        def stageDetails  = [:]
+        // ── Notification n8n — payload minimal ────────────────
+        // n8n récupère lui-même le log complet et les métriques
+        try {
+          def payload = """{
+            "event"          : "${event}",
+            "job"            : "${env.JOB_NAME}",
+            "build_number"   : "${env.BUILD_NUMBER}",
+            "build_url"      : "${env.BUILD_URL}",
+            "logs_url"       : "${env.BUILD_URL}consoleText",
+            "branch"         : "${env.GIT_BRANCH ?: 'unknown'}",
+            "status"         : "${buildStatus}",
+            "severity"       : "${severity}",
+            "project_id"     : "${env.PROJECT_ID}",
+            "sonar_project_key": "${env.SONAR_PROJECT_KEY}"
+          }"""
 
-        stageDetails['tests'] = [
-          status  : (env.TEST_FAILURES == '0' || !env.TEST_FAILURES) ? 'SUCCESS' : 'FAILED',
-          details : "Total: ${env.TEST_COUNT ?: '9'} tests, Failures: ${env.TEST_FAILURES ?: '0'}"
-        ]
-
-        stageDetails['sonarqube'] = [
-          status  : env.SONAR_STATUS ?: 'UNKNOWN',
-          details : "Project: ${env.SONAR_PROJECT_KEY}"
-        ]
-
-        stageDetails['owasp_dependency_check'] = [
-          status  : env.OWASP_STATUS ?: 'UNKNOWN',
-          details : env.OWASP_ERROR ?: 'No issues detected'
-        ]
-        if (env.OWASP_STATUS?.contains('FAILED')) {
-          failedStages  << 'OWASP Dependency Check'
-          errorMessages << (env.OWASP_ERROR ?: 'OWASP check failed')
-        }
-
-        stageDetails['nexus_deploy'] = [
-          status  : env.NEXUS_STATUS ?: 'UNKNOWN',
-          details : "JAR: ${env.JAR_NAME ?: 'N/A'}"
-        ]
-
-        stageDetails['docker_build'] = [
-          status  : env.DOCKER_BUILD_STATUS ?: 'UNKNOWN',
-          details : "Image: ${env.DOCKER_IMAGE_TAG ?: 'N/A'}"
-        ]
-
-        stageDetails['trivy_scan'] = [
-          status  : env.TRIVY_STATUS ?: 'UNKNOWN',
-          details : "Critical: ${env.TRIVY_CRITICAL ?: 0}, High: ${env.TRIVY_HIGH ?: 0}"
-        ]
-        if (env.TRIVY_STATUS?.contains('FAILED')) {
-          failedStages  << 'Trivy Container Scan'
-          errorMessages << (env.TRIVY_ERROR ?: 'Trivy scan failed')
-        }
-
-        if (buildStatus == 'FAILURE') {
-          ['Deploy App', 'DAST - OWASP ZAP'].each { s ->
-            failedStages  << s
-            errorMessages << "${s}: Skipped due to earlier failure"
-          }
+          httpRequest(
+            url                : env.N8N_WEBHOOK,
+            httpMode           : 'POST',
+            contentType        : 'APPLICATION_JSON',
+            requestBody        : payload,
+            customHeaders      : [[name: 'X-API-Key', value: env.N8N_API_KEY]],
+            ignoreSslErrors    : true,
+            validResponseCodes : '100:599'
+          )
+          echo "n8n notifie: ${event}"
+        } catch (Exception e) {
+          echo "n8n failed: ${e.message}"
         }
 
         // ── Email ─────────────────────────────────────────────
-        emailext(
-          subject: "Build ${buildStatus}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-          body: """
-            <p>Project  : ${env.JOB_NAME}</p>
-            <p>Build    : ${env.BUILD_NUMBER}</p>
-            <p>Status   : ${buildStatus}</p>
-            <p>Critical : ${env.TRIVY_CRITICAL ?: 0}</p>
-            <p>High     : ${env.TRIVY_HIGH ?: 0}</p>
-            <p><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
-          """,
-          to       : 'souhaiel.amri@esprit.tn',
-          from     : 'souhaiel.amri@esprit.tn',
-          replyTo  : 'souhaiel.amri@esprit.tn',
-          mimeType : 'text/html'
-        )
+        try {
+          emailext(
+            subject : "Build ${buildStatus}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+            body    : "<p>Status: ${buildStatus}</p><p><a href='${env.BUILD_URL}'>Voir le build</a></p>",
+            to      : 'souhaiel.amri@esprit.tn',
+            mimeType: 'text/html'
+          )
+        } catch (Exception e) {
+          echo "Email failed: ${e.message}"
+        }
 
         // ── Slack ─────────────────────────────────────────────
         try {
           slackSend(
             channel : '#souhaiel',
             color   : COLOR_MAP[buildStatus] ?: 'warning',
-            message : "*${buildStatus}:* Job `${env.JOB_NAME}` build `${env.BUILD_NUMBER}`\nURL: ${env.BUILD_URL}"
+            message : "*${buildStatus}:* `${env.JOB_NAME}` #${env.BUILD_NUMBER} ${env.BUILD_URL}"
           )
         } catch (Exception e) {
-          echo "Slack notification failed: ${e.message}"
-        }
-
-        // ── n8n — Payload complet vers agents IA ──────────────
-        try {
-          def event    = (buildStatus == 'SUCCESS') ? 'pipeline_success' : 'pipeline_failed'
-          def severity = (buildStatus == 'FAILURE') ? 'HIGH' : (buildStatus == 'UNSTABLE') ? 'MEDIUM' : 'LOW'
-
-          def failedStagesJson  = failedStages.collect  { "\"${it}\"" }.join(',')
-          def errorMessagesJson = errorMessages.collect { "\"${it.replace('"', '\\"')}\"" }.join(',')
-
-          def testsStatus  = stageDetails.tests.status
-          def testsDetails = stageDetails.tests.details
-          def sonarStatus  = stageDetails.sonarqube.status
-          def owaspStatus  = stageDetails.owasp_dependency_check.status
-          def owaspDetails = stageDetails.owasp_dependency_check.details?.replace('"', '\\"') ?: ''
-          def nexusStatus  = stageDetails.nexus_deploy.status
-          def nexusDetails = stageDetails.nexus_deploy.details
-          def dockerStatus = stageDetails.docker_build.status
-          def dockerDetails = stageDetails.docker_build.details
-          def trivyStatus  = stageDetails.trivy_scan.status
-          def trivyDetails = stageDetails.trivy_scan.details
-
-          def trivyCritical = env.TRIVY_CRITICAL ?: 0
-          def trivyHigh     = env.TRIVY_HIGH ?: 0
-          def testCount     = env.TEST_COUNT ?: 9
-          def testFailures  = env.TEST_FAILURES ?: 0
-          def testStatus    = (env.TEST_FAILURES == '0' || !env.TEST_FAILURES) ? 'PASSED' : 'FAILED'
-
-          def payload = """{
-            "event"          : "${event}",
-            "job"            : "${env.JOB_NAME}",
-            "build_number"   : "${env.BUILD_NUMBER}",
-            "build_url"      : "${env.BUILD_URL}",
-            "branch"         : "${env.GIT_BRANCH ?: 'unknown'}",
-            "status"         : "${buildStatus}",
-            "severity"       : "${severity}",
-            "sonarProjectKey": "${env.SONAR_PROJECT_KEY}",
-            "failed_stages"  : [${failedStagesJson}],
-            "error_messages" : [${errorMessagesJson}],
-            "stage_details"  : {
-              "tests"                  : { "status": "${testsStatus}",  "details": "${testsDetails}" },
-              "sonarqube"              : { "status": "${sonarStatus}",  "details": "Project: ${env.SONAR_PROJECT_KEY}" },
-              "owasp_dependency_check" : { "status": "${owaspStatus}",  "details": "${owaspDetails}" },
-              "nexus_deploy"           : { "status": "${nexusStatus}",  "details": "${nexusDetails}" },
-              "docker_build"           : { "status": "${dockerStatus}", "details": "${dockerDetails}" },
-              "trivy_scan"             : { "status": "${trivyStatus}",  "details": "${trivyDetails}" }
-            },
-            "security_summary": {
-              "trivy_critical": ${trivyCritical},
-              "trivy_high"    : ${trivyHigh},
-              "owasp_status"  : "${env.OWASP_STATUS ?: 'UNKNOWN'}",
-              "sonar_status"  : "${env.SONAR_STATUS ?: 'UNKNOWN'}"
-            },
-            "test_summary": {
-              "total"   : ${testCount},
-              "failures": ${testFailures},
-              "status"  : "${testStatus}"
-            },
-            "build": {
-              "status": "${buildStatus}",
-              "phase" : "FINALIZED",
-              "number": "${env.BUILD_NUMBER}",
-              "url"   : "${env.BUILD_URL}"
-            }
-          }"""
-
-          httpRequest(
-            url                : 'http://n8n:5678/webhook/jenkins-event',
-            httpMode           : 'POST',
-            contentType        : 'APPLICATION_JSON',
-            requestBody        : payload,
-            customHeaders      : [[name: 'X-API-Key', value: 'devsecops-secret-2024']],
-            ignoreSslErrors    : true,
-            validResponseCodes : '100:599'
-          )
-          echo "n8n notifie - event: ${event} - failed: ${failedStages}"
-        } catch (Exception e) {
-          echo "n8n notification failed: ${e.message}"
+          echo "Slack failed: ${e.message}"
         }
 
         // ── Backend Dashboard ──────────────────────────────────
         try {
-          def bp = """{"name": "${env.JOB_NAME}", "build": {"phase": "FINALIZED", "status": "${buildStatus == 'SUCCESS' ? 'SUCCESS' : 'FAILURE'}", "number": "${env.BUILD_NUMBER}", "url": "${env.BUILD_URL}"}}"""
           httpRequest(
-            url                : 'http://172.31.172.61:3001/api/webhooks/jenkins/54192eca-43da-4d8f-9b49-30c143983fdd',
+            url                : "${env.BACKEND_URL}/api/webhooks/jenkins/${env.PROJECT_ID}",
             httpMode           : 'POST',
             contentType        : 'APPLICATION_JSON',
-            requestBody        : bp,
+            requestBody        : """{"name":"${env.JOB_NAME}","build":{"phase":"FINALIZED","status":"${buildStatus}","number":"${env.BUILD_NUMBER}","url":"${env.BUILD_URL}"}}""",
             ignoreSslErrors    : true,
             validResponseCodes : '100:599'
           )
