@@ -328,7 +328,7 @@ pipeline {
         }
 
         if (buildStatus == 'FAILURE') {
-          ['Push Docker Hub', 'Deploy App', 'DAST - OWASP ZAP'].each { s ->
+          ['Deploy App', 'DAST - OWASP ZAP'].each { s ->
             failedStages  << s
             errorMessages << "${s}: Skipped due to earlier failure"
           }
