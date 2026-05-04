@@ -493,10 +493,8 @@ pipeline {
           slackSend(
             channel : '#souhaiel',
             color   : COLOR_MAP[buildStatus] ?: 'warning',
-            message : """${icon} *${buildStatus}* — \`${env.JOB_NAME}\` #${env.BUILD_NUMBER}
-Branch: \`${branch}\` | Tests: ${env.TEST_TOTAL ?: '?'}/${env.TEST_FAILURES ?: '?'} failed
-Quality Gate: ${env.QUALITY_GATE_STATUS ?: 'N/A'} | Trivy CRITICAL: ${env.TRIVY_CRITICAL ?: '0'}
-${env.BUILD_URL}"""
+            // APRÈS — correct
+            message : "${icon} *${buildStatus}* — ${env.JOB_NAME} #${env.BUILD_NUMBER}\nBranch: ${branch} | Tests: ${env.TEST_TOTAL ?: '?'} total, ${env.TEST_FAILURES ?: '?'} failed\nQuality Gate: ${env.QUALITY_GATE_STATUS ?: 'N/A'} | Trivy CRITICAL: ${env.TRIVY_CRITICAL ?: '0'}\n${env.BUILD_URL}"
           )
         } catch (Exception e) {
           echo "⚠️ Slack failed: ${e.message}"
