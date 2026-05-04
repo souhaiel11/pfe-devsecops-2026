@@ -85,30 +85,50 @@ pipeline {
     }
 
     // ── 4. Tests unitaires + Couverture JaCoCo ───────────────
-    stage('🧪 Tests + Coverage') {
-      steps {
-        dir('app') {
-          sh 'mvn test jacoco:report'
-        }
-      }
-      post {
-        always {
-          junit allowEmptyResults: true,
-                testResults: 'app/target/surefire-reports/*.xml'
-          script {
-            def testResults = currentBuild.rawBuild.getAction(hudson.tasks.junit.TestResultAction)
-            env.TEST_TOTAL    = testResults?.totalCount?.toString()    ?: '0'
-            env.TEST_FAILURES = testResults?.failCount?.toString()     ?: '0'
-            env.TEST_SKIPPED  = testResults?.skipCount?.toString()     ?: '0'
-            env.TEST_STATUS   = (env.TEST_FAILURES == '0') ? 'PASSED' : 'FAILED'
-            echo "Tests: ${env.TEST_TOTAL} total, ${env.TEST_FAILURES} failures"
-          }
-        }
-        failure {
-          script { env.TEST_STATUS = 'FAILED' }
-        }
+stage('🧪 Tests + Coverage') {
+  steps {
+    dir('app') {
+      sh 'mvn test jacoco:report'
+    }
+  }
+
+  post {
+    always {
+      junit allowEmptyResults: true,
+            testResults: 'app/target/surefire-reports/*.xml'
+
+      script {
+        def total = sh(
+          script: "grep -h '<testsuite' app/target/surefire-reports/*.xml | sed -n 's/.*tests=\"\\([0-9]*\\)\".*/\\1/p' | awk '{s+=\$1} END {print s+0}'",
+          returnStdout: true
+        ).trim()
+
+        def failures = sh(
+          script: "grep -h '<testsuite' app/target/surefire-reports/*.xml | sed -n 's/.*failures=\"\\([0-9]*\\)\".*/\\1/p' | awk '{s+=\$1} END {print s+0}'",
+          returnStdout: true
+        ).trim()
+
+        def skipped = sh(
+          script: "grep -h '<testsuite' app/target/surefire-reports/*.xml | sed -n 's/.*skipped=\"\\([0-9]*\\)\".*/\\1/p' | awk '{s+=\$1} END {print s+0}'",
+          returnStdout: true
+        ).trim()
+
+        env.TEST_TOTAL    = total
+        env.TEST_FAILURES = failures
+        env.TEST_SKIPPED  = skipped
+        env.TEST_STATUS   = (failures == '0') ? 'PASSED' : 'FAILED'
+
+        echo "Tests: ${env.TEST_TOTAL} total, ${env.TEST_FAILURES} failures, ${env.TEST_SKIPPED} skipped"
       }
     }
+
+    failure {
+      script {
+        env.TEST_STATUS = 'FAILED'
+      }
+    }
+  }
+}
 
     // ── 5. Packaging ─────────────────────────────────────────
     stage('📦 Package') {
