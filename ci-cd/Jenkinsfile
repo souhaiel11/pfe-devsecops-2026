@@ -96,7 +96,7 @@ pipeline {
           junit allowEmptyResults: true,
                 testResults: 'app/target/surefire-reports/*.xml'
           script {
-            def testResults = currentBuild.testResultAction
+            def testResults = currentBuild.rawBuild.getAction(hudson.tasks.junit.TestResultAction)
             env.TEST_TOTAL    = testResults?.totalCount?.toString()    ?: '0'
             env.TEST_FAILURES = testResults?.failCount?.toString()     ?: '0'
             env.TEST_SKIPPED  = testResults?.skipCount?.toString()     ?: '0'
