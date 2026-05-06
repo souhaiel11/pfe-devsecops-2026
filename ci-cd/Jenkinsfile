@@ -159,9 +159,9 @@ stage('🧪 Tests + Coverage') {
               /var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn \
               org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
               -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} \
-              -Dsonar.projectVersion=${env.BUILD_VERSION} \
+              -Dsonar.projectVersion=${env.BUILD_VERSION}
               
-              -q
+             
             """
           }
           script { env.SONAR_STATUS = 'SUCCESS' }
@@ -178,7 +178,7 @@ stage('🧪 Tests + Coverage') {
     stage('⏳ Quality Gate') {
       options {
         catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE')
-        timeout(time: 3, unit: 'MINUTES')
+        timeout(time: 5, unit: 'MINUTES')
       }
       steps {
         script {
@@ -410,6 +410,7 @@ stage('🧪 Tests + Coverage') {
       }
       steps {
         sh """
+          sleep 15
           docker run --rm \
             --network ${DOCKER_NETWORK} \
             -v \$(pwd)/security/zap:/zap/wrk:rw --user root \
