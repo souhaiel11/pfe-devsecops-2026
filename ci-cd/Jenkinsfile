@@ -160,7 +160,7 @@ stage('🧪 Tests + Coverage') {
               org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
               -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} \
               -Dsonar.projectVersion=${env.BUILD_VERSION} \
-              -Dsonar.branch.name=${env.BUILD_BRANCH} \
+              
               -q
             """
           }
@@ -412,7 +412,7 @@ stage('🧪 Tests + Coverage') {
         sh """
           docker run --rm \
             --network ${DOCKER_NETWORK} \
-            -v \$(pwd)/security/zap:/zap/wrk \
+            -v \$(pwd)/security/zap:/zap/wrk:rw --user root \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
             -t http://${APP_NAME}:8080 \
